@@ -5,4 +5,4 @@
     state: restarted
 
 - name: Restart Traefik
-  ansible.builtin.shell: docker service update --force dokploy-traefik
+  ansible.builtin.shell: docker restart dokploy-traefik
