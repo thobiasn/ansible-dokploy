@@ -150,7 +150,7 @@
     new_lines = []
     for line in lines:
         new_lines.append(line)
-        m = re.match(r'^(\s+)address:\s*":(80|443)"', line)
+        m = re.match(r'^(\s+)address:\s*"?:(80|443)"?', line)
         if m:
             indent = m.group(1)
             new_lines.append(f'{indent}forwardedHeaders:')
