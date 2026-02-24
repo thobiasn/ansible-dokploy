@@ -14,7 +14,7 @@
 - name: UFW - Allow SSH
   community.general.ufw:
     rule: allow
-    port: 2275
+    port: "{{ ssh_port | string }}"
     proto: tcp
   tags: ufw_rules
 
@@ -30,6 +30,14 @@
     rule: allow
     port: 443
     proto: tcp
+  tags: ufw_rules
+
+- name: UFW - Allow extra ports
+  community.general.ufw:
+    rule: allow
+    port: "{{ item.port | string }}"
+    proto: "{{ item.proto | default('tcp') }}"
+  loop: "{{ ufw_extra_ports }}"
   tags: ufw_rules
 
 - name: UFW - Enable UFW

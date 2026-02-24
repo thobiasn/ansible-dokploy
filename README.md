@@ -10,11 +10,13 @@ When you run this playbook against a fresh VPS, it will:
 
 - **Install system packages** — curl, vim, git, ufw, tmux, net-tools, and enable automatic security updates
 - **Harden SSH** — change port to 2275, disable root and password login, restrict to pubkey-only with hardened ciphers
-- **Set up Fail2ban** — SSH jail (aggressive mode) and a Traefik HTTP jail for repeated 4xx abuse
+- **Set up Fail2ban** — SSH jail (aggressive mode) that bans after 3 failed attempts
 - **Create a non-root user** — with your SSH key, a random system password, and passwordless sudo
 - **Configure UFW firewall** — deny all incoming, allow outgoing, open ports 2275 (SSH), 80, and 443
 - **Apply kernel hardening** — sysctl tweaks (SYN cookies, disable redirects, restrict ptrace/dmesg) and disable unused kernel modules (dccp, sctp, rds, tipc)
 - **Install Dokploy** *(control node only)* — runs the official Dokploy install script
+- **Deploy Traefik security headers** *(control node only)* — HSTS, content-type sniffing protection, frame denial, referrer policy, and more
+- **Install CrowdSec intrusion prevention** *(control node only)* — community-driven IPS with Traefik bouncer plugin and shared blocklists
 
 ---
 
@@ -24,10 +26,10 @@ Before starting, make sure you have:
 
 1. **A Debian or Ubuntu VPS** with root SSH access
 2. **Ansible installed** on your local machine — follow the [official installation guide](https://docs.ansible.com/ansible/latest/installation_guide/intro_installation.html#installing-and-upgrading-ansible-with-pip)
-3. **The `community.general` Ansible collection** installed (required for the UFW module):
+3. **The `community.general` and `community.docker` Ansible collections** installed:
 
 ```bash
-ansible-galaxy collection install community.general
+ansible-galaxy collection install community.general community.docker
 ```
 
 4. **An SSH key pair** — you'll need the path to your public key file
@@ -67,14 +69,20 @@ Edit `playbook.yml` and update the `vars` section:
 
 ```yaml
 vars:
+  ssh_port: 2275        # SSH port (must match hosts file after first run)
   user_name: admin      # replace with your desired username
   user_ssh_key: "{{ lookup('file', '~/.ssh/id_ed25519.pub') }}"  # path to your public key
-  is_control_node: false # set to true on the main Dokploy control VPS
+  is_control_node: true  # set to false for external worker nodes
+  cloudflare_proxy: false # set to true if domain uses Cloudflare proxy (orange cloud)
+  ufw_extra_ports: []     # additional UFW ports to open, e.g. [{port: 25, proto: tcp}]
 ```
 
+- `ssh_port` — the SSH port used by sshd, UFW, and fail2ban (default: `2275`). If you change this, also update `ansible_port` in your `hosts` file
 - `user_name` — the non-root user the playbook creates on the server
 - `user_ssh_key` — a `file` lookup pointing to your SSH **public** key (this gets copied to the server)
-- `is_control_node` — set to `true` for your main Dokploy server, `false` for worker nodes
+- `is_control_node` — `true` by default (installs Dokploy + CrowdSec + security headers), set to `false` for worker nodes
+- `cloudflare_proxy` — set to `true` if your domain uses Cloudflare proxy (orange cloud). Configures Traefik to trust Cloudflare's forwarded headers so CrowdSec sees real visitor IPs
+- `ufw_extra_ports` — list of additional ports to open in UFW beyond the defaults (SSH port, 80, 443). Each entry needs `port` and optionally `proto` (defaults to `tcp`)
 
 ### Step 4: Run the playbook (first run)
 
@@ -188,26 +196,121 @@ The playbook deploys `security.sh` to `/root/security.sh` and sources it in root
 
 ---
 
-## Fail2Ban Traefik Configuration
+## Traefik Security Headers
 
-A Fail2ban jail is included for Traefik that bans IPs making repeated 401, 403, 400, or 429 requests. For this to work reliably, you need to adjust the Traefik config so access logs are not buffered or filtered.
+The playbook deploys a Traefik dynamic config file at `/etc/dokploy/traefik/dynamic/security-headers.yml` that defines a `security-headers` middleware with the following headers:
 
-In the Dokploy UI (**Traefik File System** > `traefik.yml`) or directly at `/etc/dokploy/traefik/traefik.yml`, update the `accessLog` entry:
+| Header | Value | Purpose |
+| --- | --- | --- |
+| Strict-Transport-Security | `max-age=31536000; includeSubDomains; preload` | Force HTTPS for 1 year |
+| X-Content-Type-Options | `nosniff` | Prevent MIME-type sniffing |
+| X-Frame-Options | `DENY` | Block iframe embedding |
+| Referrer-Policy | `strict-origin-when-cross-origin` | Limit referrer leakage |
+| Permissions-Policy | Deny camera, microphone, geolocation, payment, usb, interest-cohort | Restrict browser APIs |
+| Server / X-Powered-By | *(empty)* | Hide server identity |
+
+### Applying the Middleware
+
+Add `security-headers@file` to your service's Traefik labels:
 
 ```yaml
-accessLog:
-  filePath: /etc/dokploy/traefik/dynamic/access.log
-  format: json
-  bufferingSize: 10
+labels:
+  - "traefik.http.routers.myapp.middlewares=security-headers@file"
 ```
 
-For **remote servers**, add the above block to each server's Traefik config. You can do this via the Dokploy UI (**Remote Servers** > **...** > **Show Traefik File System**) or directly on the server.
+Or in the Dokploy UI: go to your service's **Advanced** > **Traefik** settings and add `security-headers@file` to the middleware list.
+
+### Chaining Multiple Middlewares
+
+Combine middlewares with commas:
+
+```yaml
+labels:
+  - "traefik.http.routers.myapp.middlewares=security-headers@file,crowdsec-bouncer@file"
+```
+
+### Overriding frameDeny for Iframes
+
+If a service needs to be embedded in an iframe, create a separate dynamic config file that overrides `frameDeny`:
+
+```yaml
+# /etc/dokploy/traefik/dynamic/allow-frames.yml
+http:
+  middlewares:
+    allow-frames:
+      headers:
+        frameDeny: false
+        customFrameOptionsValue: "SAMEORIGIN"
+```
+
+Then use `allow-frames@file` instead of (or in addition to) `security-headers@file` for that service.
+
+---
+
+## CrowdSec Intrusion Prevention
+
+The playbook installs [CrowdSec](https://www.crowdsec.net/) on the control node — a community-driven intrusion prevention system that detects and blocks malicious traffic using behavioral analysis and shared blocklists.
+
+### What Gets Installed
+
+- **CrowdSec agent** — monitors Traefik access logs for suspicious patterns
+- **Traefik collection** (`crowdsecurity/traefik`) — detection scenarios for HTTP attacks (scanners, brute-force, etc.)
+- **Traefik bouncer plugin** — a Traefik middleware that checks incoming requests against CrowdSec decisions and blocks banned IPs
+- **Community blocklists** — automatically shared threat intelligence from the CrowdSec network
+
+### LAPI Connectivity
+
+The playbook automatically configures LAPI (CrowdSec's Local API) connectivity:
+
+- Binds LAPI to `0.0.0.0:8080` so Docker containers can reach it (UFW still blocks external access since port 8080 is not opened)
+- Detects the `docker_gwbridge` gateway IP and uses it in the bouncer middleware config so the Traefik Swarm container can reach the host's LAPI
+
+### Traefik Static Config
+
+The playbook appends two blocks to `/etc/dokploy/traefik/traefik.yml`:
+
+1. **CrowdSec bouncer plugin** — registers the plugin under `experimental.plugins`
+2. **Access log** — enables JSON access logs at `/etc/dokploy/traefik/dynamic/access.log`
+
+> **Note:** Dokploy may overwrite `traefik.yml` during updates. If the CrowdSec plugin or access log config disappears, re-run the playbook to restore it.
+
+### Applying the Bouncer Middleware
+
+Add `crowdsec-bouncer@file` to your service's Traefik labels:
+
+```yaml
+labels:
+  - "traefik.http.routers.myapp.middlewares=crowdsec-bouncer@file"
+```
+
+Or combine with security headers:
+
+```yaml
+labels:
+  - "traefik.http.routers.myapp.middlewares=security-headers@file,crowdsec-bouncer@file"
+```
+
+### Useful CrowdSec Commands
+
+| Command | Description |
+| --- | --- |
+| `cscli decisions list` | Show currently active bans |
+| `cscli alerts list` | Show recent alerts |
+| `cscli bouncers list` | List registered bouncers |
+| `cscli collections list` | List installed detection collections |
+| `cscli hub update` | Update the hub (scenarios, parsers, etc.) |
+| `cscli hub upgrade` | Upgrade installed hub items |
+| `cscli decisions add --ip 1.2.3.4 --duration 24h --reason "manual ban"` | Manually ban an IP |
+| `cscli decisions delete --ip 1.2.3.4` | Unban an IP |
+| `cscli metrics` | Show CrowdSec metrics |
 
 ### Cloudflare Users
 
-If your domain uses Cloudflare with the orange cloud (proxy) enabled, Traefik and Fail2ban will only see Cloudflare's IP addresses, not the real visitor IPs. This means the Traefik Fail2ban jail cannot reliably block individual attackers.
+If your domain uses Cloudflare with the orange cloud (proxy) enabled, Traefik will only see Cloudflare's IP addresses by default — not the real visitor IPs. To fix this, set `cloudflare_proxy: true` in your playbook variables. This configures Traefik to trust Cloudflare's forwarded headers (`CF-Connecting-IP` / `X-Forwarded-For`) so access logs contain real client IPs and CrowdSec can identify individual attackers.
 
-**If you use Cloudflare:** Consider the Traefik Fail2ban jail optional. Use Cloudflare's own Firewall Rules, WAF, or Rate Limiting for client-IP blocking. Fail2ban will still protect SSH and other non-proxied services normally.
+The playbook adds Cloudflare's published IPv4 and IPv6 ranges to Traefik's `entryPoints.*.forwardedHeaders.trustedIPs`. If Cloudflare updates their IP ranges, update the list in `roles/crowdsec/tasks/main.yml` — the current ranges are from [cloudflare.com/ips](https://www.cloudflare.com/ips/).
+
+> **Note:** If Dokploy overwrites `traefik.yml`, re-run the playbook to restore the trusted IPs configuration.
 
 ---
 
@@ -249,10 +352,11 @@ The admin user receives a random system password (stored only in `/etc/shadow`).
 
 ### Fail2ban Protection
 
-Fail2ban protects:
+Fail2ban protects SSH with aggressive mode, banning IPs after 3 failed login attempts for 10 minutes.
 
-- **SSH** — aggressive mode, bans after 3 failed attempts for 10 minutes
-- **Traefik HTTP** — bans after 15 error responses (401/403/400/429) within 5 minutes for 1 hour
+### CrowdSec Protection (Control Node)
+
+CrowdSec monitors Traefik access logs for malicious patterns (scanners, brute-force, exploits) and blocks offending IPs via the Traefik bouncer plugin. See the [CrowdSec Intrusion Prevention](#crowdsec-intrusion-prevention) section for details.
 
 ---
 
@@ -279,7 +383,3 @@ ansible-galaxy collection install community.general
 ### VPS provider firewall blocking port 2275
 
 Some VPS providers (e.g. Oracle Cloud, AWS) have an external firewall or security group in addition to the server's UFW. Make sure port **2275** is allowed in your provider's firewall/security group settings.
-
-### Fail2ban Traefik jail not working
-
-Make sure you've updated the Traefik config to include the `accessLog` block as described in the [Fail2Ban Traefik Configuration](#fail2ban-traefik-configuration) section. The jail needs JSON-formatted access logs at `/etc/dokploy/traefik/dynamic/access.log`.

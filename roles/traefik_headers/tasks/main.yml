@@ -1,0 +1,30 @@
+---
+- name: Ensure Traefik dynamic config directory exists
+  file:
+    path: /etc/dokploy/traefik/dynamic
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Deploy Traefik security headers middleware
+  copy:
+    dest: /etc/dokploy/traefik/dynamic/security-headers.yml
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      http:
+        middlewares:
+          security-headers:
+            headers:
+              stsSeconds: 31536000
+              stsIncludeSubdomains: true
+              stsPreload: true
+              contentTypeNosniff: true
+              frameDeny: true
+              referrerPolicy: "strict-origin-when-cross-origin"
+              permissionsPolicy: "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()"
+              customResponseHeaders:
+                server: ""
+                x-powered-by: ""

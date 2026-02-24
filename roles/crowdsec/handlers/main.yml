@@ -1,0 +1,8 @@
+---
+- name: Restart CrowdSec
+  systemd:
+    name: crowdsec
+    state: restarted
+
+- name: Restart Traefik
+  ansible.builtin.shell: docker service update --force dokploy-traefik

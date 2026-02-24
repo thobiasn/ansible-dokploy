@@ -41,53 +41,26 @@
     group: root
     mode: 0440
 
-# Copy the security script to the target machine
 - name: Copy security script to target machine
   copy:
-    src: "{{ playbook_dir }}/scripts/security.sh"  # Relative to the playbook.yml
+    src: "{{ playbook_dir }}/scripts/security.sh"
     dest: /root/security.sh
     owner: root
     group: root
     mode: 0755
 
-# Ensure the SSH security functions script is executable (redundant but safe)
-- name: Ensure the script is executable
-  file:
-    path: /root/security.sh
-    owner: root
-    group: root
-    mode: 0755
-
-# Copy the setup script to the target machine
 - name: Copy setup script to target machine
   copy:
-    src: "{{ playbook_dir }}/scripts/node-setup.sh"  # Relative to the playbook.yml
+    src: "{{ playbook_dir }}/scripts/node-setup.sh"
     dest: "/home/{{ user_name }}/node-setup.sh"
     owner: "{{ user_name }}"
     group: "{{ user_name }}"
     mode: 0755
 
-# Ensure the setup script is executable
-- name: Ensure the script is executable
-  file:
-    path: "/home/{{ user_name }}/node-setup.sh"
-    owner: "{{ user_name }}"
-    group: "{{ user_name }}"
-    mode: 0755
-
-# Copy the docker group setup script to the target machine
 - name: Copy docker group setup script to target machine
   copy:
-    src: "{{ playbook_dir }}/scripts/node-setup-user-groups.sh"  # Relative to the playbook.yml
+    src: "{{ playbook_dir }}/scripts/node-setup-user-groups.sh"
     dest: "/home/{{ user_name }}/node-setup-user-groups.sh"
-    owner: "{{ user_name }}"
-    group: "{{ user_name }}"
-    mode: 0755
-
-# Ensure the setup script is executable
-- name: Ensure the script is executable
-  file:
-    path: "/home/{{ user_name }}/node-setup-user-groups.sh"
     owner: "{{ user_name }}"
     group: "{{ user_name }}"
     mode: 0755

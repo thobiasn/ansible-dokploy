@@ -5,7 +5,7 @@
     dest: /etc/ssh/sshd_config
     content: |
       # SSHD Configuration - Secure for Pubkey Only
-      Port 2275
+      Port {{ ssh_port }}
       PermitRootLogin no
       PasswordAuthentication no
       PubkeyAuthentication yes
