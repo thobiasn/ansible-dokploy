@@ -15,8 +15,8 @@ When you run this playbook against a fresh VPS, it will:
 - **Configure UFW firewall** — deny all incoming, allow outgoing, open ports 2275 (SSH), 80, and 443
 - **Apply kernel hardening** — sysctl tweaks (SYN cookies, disable redirects, restrict ptrace/dmesg) and disable unused kernel modules (dccp, sctp, rds, tipc)
 - **Install Dokploy** *(control node only)* — runs the official Dokploy install script
-- **Deploy Traefik security headers** *(control node only)* — HSTS, content-type sniffing protection, frame denial, referrer policy, and more
-- **Install CrowdSec intrusion prevention** *(control node only)* — community-driven IPS with Traefik bouncer plugin and shared blocklists
+- **Deploy Traefik security headers** *(any node with Traefik)* — HSTS, content-type sniffing protection, frame denial, referrer policy, and more
+- **Install CrowdSec intrusion prevention** *(any node with Traefik)* — community-driven IPS with Traefik bouncer plugin and shared blocklists
 
 ---
 
@@ -80,7 +80,7 @@ vars:
 - `ssh_port` — the SSH port used by sshd, UFW, and fail2ban (default: `2275`). If you change this, also update `ansible_port` in your `hosts` file
 - `user_name` — the non-root user the playbook creates on the server
 - `user_ssh_key` — a `file` lookup pointing to your SSH **public** key (this gets copied to the server)
-- `is_control_node` — `true` by default (installs Dokploy + CrowdSec + security headers), set to `false` for worker nodes
+- `is_control_node` — `true` by default (installs Dokploy), set to `false` for worker nodes. Traefik security headers and CrowdSec run automatically on any node where Traefik is installed
 - `cloudflare_proxy` — set to `true` if your domain uses Cloudflare proxy (orange cloud). Configures Traefik to trust Cloudflare's forwarded headers so CrowdSec sees real visitor IPs
 - `ufw_extra_ports` — list of additional ports to open in UFW beyond the defaults (SSH port, 80, 443). Each entry needs `port` and optionally `proto` (defaults to `tcp`)
 
@@ -171,7 +171,13 @@ sudo ./node-setup-user-groups.sh
 
 4. **Log out and back in** for the group membership to take effect.
 
-5. Back in Dokploy's UI on the control node, add this server as a remote server.
+5. **Re-run the playbook** to deploy Traefik security headers and CrowdSec (now that Traefik is installed):
+
+```bash
+ansible-playbook -i hosts playbook.yml -l vps -u admin
+```
+
+6. Back in Dokploy's UI on the control node, add this server as a remote server.
 
 ---
 
@@ -249,7 +255,7 @@ Then use `allow-frames@file` instead of (or in addition to) `security-headers@fi
 
 ## CrowdSec Intrusion Prevention
 
-The playbook installs [CrowdSec](https://www.crowdsec.net/) on the control node — a community-driven intrusion prevention system that detects and blocks malicious traffic using behavioral analysis and shared blocklists.
+The playbook installs [CrowdSec](https://www.crowdsec.net/) on any node where Traefik is installed — a community-driven intrusion prevention system that detects and blocks malicious traffic using behavioral analysis and shared blocklists.
 
 ### What Gets Installed
 
@@ -354,7 +360,7 @@ The admin user receives a random system password (stored only in `/etc/shadow`).
 
 Fail2ban protects SSH with aggressive mode, banning IPs after 3 failed login attempts for 10 minutes.
 
-### CrowdSec Protection (Control Node)
+### CrowdSec Protection
 
 CrowdSec monitors Traefik access logs for malicious patterns (scanners, brute-force, exploits) and blocks offending IPs via the Traefik bouncer plugin. See the [CrowdSec Intrusion Prevention](#crowdsec-intrusion-prevention) section for details.
 
