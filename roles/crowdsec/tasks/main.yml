@@ -96,7 +96,7 @@
             plugin:
               crowdsec-bouncer-traefik-plugin:
                 crowdsecLapiKey: "{{ crowdsec_bouncer_api_key }}"
-                crowdsecLapiHost: "http://{{ docker_gwbridge_ip }}:8080"
+                crowdsecLapiHost: "{{ docker_gwbridge_ip }}:8080"
                 crowdsecMode: live
 
 - name: Add CrowdSec bouncer plugin to Traefik static config
@@ -167,6 +167,40 @@
   register: cf_ips_result
   changed_when: "'CHANGED' in cf_ips_result.stdout"
   when: cloudflare_proxy
+  notify: Restart Traefik
+
+- name: Set default middlewares on websecure entryPoint
+  ansible.builtin.shell: |
+    python3 << 'PYEOF'
+    import sys, re
+
+    path = '/etc/dokploy/traefik/traefik.yml'
+    with open(path) as f:
+        content = f.read()
+
+    if 'security-headers@file' in content:
+        print('OK')
+        sys.exit(0)
+
+    lines = content.split('\n')
+    new_lines = []
+    for line in lines:
+        new_lines.append(line)
+        m = re.match(r'^(\s+)http:\s*$', line)
+        if m:
+            indent = m.group(1)
+            new_lines.append(f'{indent}  middlewares:')
+            new_lines.append(f'{indent}    - security-headers@file')
+            new_lines.append(f'{indent}    - crowdsec-bouncer@file')
+
+    with open(path, 'w') as f:
+        f.write('\n'.join(new_lines))
+    print('CHANGED')
+    PYEOF
+  args:
+    executable: /bin/bash
+  register: default_mw_result
+  changed_when: "'CHANGED' in default_mw_result.stdout"
   notify: Restart Traefik
 
 - name: Flush handlers to restart CrowdSec before continuing
