@@ -19,8 +19,8 @@
 - name: Bind CrowdSec LAPI to all interfaces (reachable from Docker containers)
   ansible.builtin.lineinfile:
     path: /etc/crowdsec/config.yaml
-    regexp: '^\s*listen_addr:\s'
-    line: '  listen_addr: 0.0.0.0:8080'
+    regexp: '^\s*listen_uri:\s'
+    line: '    listen_uri: 0.0.0.0:8080'
   notify: Restart CrowdSec
 
 - name: Ensure CrowdSec acquisition directory exists
