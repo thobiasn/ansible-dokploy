@@ -111,7 +111,22 @@
             version: v1.4.1
   notify: Restart Traefik
 
-- name: Add Traefik access log config
+- name: Check if upstream Traefik already has accessLog config
+  ansible.builtin.shell: |
+    sed '/# BEGIN ANSIBLE MANAGED BLOCK - access log/,/# END ANSIBLE MANAGED BLOCK - access log/d' /etc/dokploy/traefik/traefik.yml | grep -q '^accessLog:'
+  register: upstream_has_access_log
+  changed_when: false
+  failed_when: false
+
+- name: Remove legacy access log managed block (upstream provides its own)
+  ansible.builtin.blockinfile:
+    path: /etc/dokploy/traefik/traefik.yml
+    marker: "# {mark} ANSIBLE MANAGED BLOCK - access log"
+    state: absent
+  when: upstream_has_access_log.rc == 0
+  notify: Restart Traefik
+
+- name: Add Traefik access log config (upstream doesn't have one)
   ansible.builtin.blockinfile:
     path: /etc/dokploy/traefik/traefik.yml
     marker: "# {mark} ANSIBLE MANAGED BLOCK - access log"
@@ -120,6 +135,7 @@
         filePath: /etc/dokploy/traefik/dynamic/access.log
         format: json
         bufferingSize: 10
+  when: upstream_has_access_log.rc != 0
   notify: Restart Traefik
 
 - name: Add Cloudflare trusted IPs to Traefik entryPoints
@@ -150,7 +166,7 @@
     new_lines = []
     for line in lines:
         new_lines.append(line)
-        m = re.match(r'^(\s+)address:\s*"?:(80|443)"?', line)
+        m = re.match(r"^(\s+)address:\s*[\"']?:(80|443)[\"']?", line)
         if m:
             indent = m.group(1)
             new_lines.append(f'{indent}forwardedHeaders:')
