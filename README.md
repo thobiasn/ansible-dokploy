@@ -12,7 +12,8 @@ When you run this playbook against a fresh VPS, it will:
 - **Harden SSH** — change port to 2275, disable root and password login, restrict to pubkey-only with hardened ciphers
 - **Set up Fail2ban** — SSH jail (aggressive mode) that bans after 3 failed attempts
 - **Create a non-root user** — with your SSH key, a random system password, and passwordless sudo
-- **Configure UFW firewall** — deny all incoming, allow outgoing, open ports 2275 (SSH), 80, and 443
+- **Install Tailscale VPN** *(optional)* — sets up Tailscale for private SSH access over a WireGuard mesh network, removing the need for a public SSH port
+- **Configure UFW firewall** — deny all incoming, allow outgoing, open ports 80 and 443. SSH port is only opened when Tailscale is disabled or not yet connected
 - **Apply kernel hardening** — sysctl tweaks (SYN cookies, disable redirects, restrict ptrace/dmesg) and disable unused kernel modules (dccp, sctp, rds, tipc)
 - **Install Dokploy** *(control node only)* — runs the official Dokploy install script
 - **Deploy Traefik security headers** *(any node with Traefik)* — HSTS, content-type sniffing protection, frame denial, referrer policy, and more
@@ -75,6 +76,7 @@ vars:
   is_control_node: true  # set to false for external worker nodes
   cloudflare_proxy: false # set to true if domain uses Cloudflare proxy (orange cloud)
   ufw_extra_ports: []     # additional UFW ports to open, e.g. [{port: 25, proto: tcp}]
+  use_tailscale: true     # when true, installs Tailscale and closes public SSH port in UFW
 ```
 
 - `ssh_port` — the SSH port used by sshd, UFW, and fail2ban (default: `2275`). If you change this, also update `ansible_port` in your `hosts` file
@@ -83,6 +85,7 @@ vars:
 - `is_control_node` — `true` by default (installs Dokploy), set to `false` for worker nodes. Traefik security headers and CrowdSec run automatically on any node where Traefik is installed
 - `cloudflare_proxy` — set to `true` if your domain uses Cloudflare proxy (orange cloud). Configures Traefik to trust Cloudflare's forwarded headers so CrowdSec sees real visitor IPs
 - `ufw_extra_ports` — list of additional ports to open in UFW beyond the defaults (SSH port, 80, 443). Each entry needs `port` and optionally `proto` (defaults to `tcp`)
+- `use_tailscale` — `true` by default. Installs Tailscale and closes the public SSH port in UFW once Tailscale is connected. Set to `false` to skip Tailscale and keep SSH accessible on the public IP. Pass the auth key via `--extra-vars` (see [Tailscale VPN](#tailscale-vpn) below)
 
 ### Step 4: Run the playbook (first run)
 
@@ -317,6 +320,44 @@ If your domain uses Cloudflare with the orange cloud (proxy) enabled, Traefik wi
 The playbook adds Cloudflare's published IPv4 and IPv6 ranges to Traefik's `entryPoints.*.forwardedHeaders.trustedIPs`. If Cloudflare updates their IP ranges, update the list in `roles/crowdsec/tasks/main.yml` — the current ranges are from [cloudflare.com/ips](https://www.cloudflare.com/ips/).
 
 > **Note:** If Dokploy overwrites `traefik.yml`, re-run the playbook to restore the trusted IPs configuration.
+
+---
+
+## Tailscale VPN
+
+When `use_tailscale: true`, the playbook installs [Tailscale](https://tailscale.com/) — a WireGuard-based mesh VPN that lets you SSH into your server over a private network (`100.x.y.z`) without exposing an SSH port to the internet.
+
+### Setup
+
+1. **Create a Tailscale account** at [login.tailscale.com](https://login.tailscale.com)
+2. **Install Tailscale on your local machine** — see [tailscale.com/download](https://tailscale.com/download)
+3. **Generate an auth key** — go to Tailscale admin console > Settings > Keys > Generate auth key. Use a **reusable** key if provisioning multiple servers
+4. **Run the playbook** with the auth key passed via `--extra-vars`:
+
+```bash
+ansible-playbook -i hosts playbook.yml -l vps -u root --become --extra-vars "tailscale_auth_key=tskey-auth-..."
+```
+
+### How It Works
+
+- The **tailscale** role runs before the **ufw** role
+- If Tailscale authenticates successfully, UFW **closes** the public SSH port — all SSH access goes through the Tailscale network
+- If Tailscale is not connected (first run without an auth key, or auth fails), UFW **keeps** the SSH port open so you don't get locked out
+- On subsequent runs, if Tailscale is already authenticated, the auth key is not needed
+
+### Connecting
+
+Once Tailscale is running on both your local machine and the server:
+
+```bash
+ssh -p 2275 admin@100.x.y.z
+```
+
+Find the server's Tailscale IP in the [admin console](https://login.tailscale.com/admin/machines) or by running `tailscale ip -4` on the server.
+
+### Disabling Tailscale
+
+Set `use_tailscale: false` in `playbook.yml`. The tailscale role will be skipped and UFW will keep the SSH port open.
 
 ---
 
