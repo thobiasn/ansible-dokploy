@@ -1,0 +1,60 @@
+---
+- name: Install Tailscale apt signing key
+  ansible.builtin.shell:
+    cmd: curl -fsSL https://pkgs.tailscale.com/stable/{{ ansible_distribution | lower }}/{{ ansible_distribution_release }}.noarmor.gpg | tee /usr/share/keyrings/tailscale-archive-keyring.gpg > /dev/null
+  args:
+    creates: /usr/share/keyrings/tailscale-archive-keyring.gpg
+
+- name: Add Tailscale apt repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/tailscale.list
+    content: "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/{{ ansible_distribution | lower }} {{ ansible_distribution_release }} main\n"
+    owner: root
+    group: root
+    mode: '0644'
+  register: tailscale_repo
+
+- name: Update apt cache after adding Tailscale repo
+  ansible.builtin.apt:
+    update_cache: yes
+  when: tailscale_repo.changed
+
+- name: Install Tailscale
+  ansible.builtin.apt:
+    name: tailscale
+    state: present
+
+- name: Enable and start tailscaled
+  ansible.builtin.systemd:
+    name: tailscaled
+    enabled: yes
+    state: started
+
+- name: Check Tailscale connection status
+  ansible.builtin.command: tailscale status
+  register: tailscale_status
+  changed_when: false
+  failed_when: false
+
+- name: Set Tailscale connected fact
+  ansible.builtin.set_fact:
+    tailscale_connected: "{{ tailscale_status.rc == 0 }}"
+
+- name: Authenticate Tailscale with auth key
+  ansible.builtin.command:
+    cmd: tailscale up --authkey={{ tailscale_auth_key }}
+  no_log: true
+  changed_when: tailscale_status.rc != 0
+  register: tailscale_auth
+  when:
+    - tailscale_auth_key is defined
+    - tailscale_auth_key | length > 0
+    - tailscale_status.rc != 0
+
+- name: Update Tailscale connected fact after authentication
+  ansible.builtin.set_fact:
+    tailscale_connected: true
+  when:
+    - tailscale_auth is defined
+    - tailscale_auth is not skipped
+    - tailscale_auth.rc == 0

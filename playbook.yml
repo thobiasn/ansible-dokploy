@@ -9,21 +9,35 @@
     is_control_node: true # set to false for external worker nodes
     cloudflare_proxy: true # set to true if domain uses Cloudflare proxy (orange cloud)
     ufw_extra_ports: [] # additional UFW ports to open, e.g. [{port: 25, proto: tcp}]
+    use_tailscale: true # when true, installs Tailscale and closes public SSH port in UFW
 
   roles:
     - packages
     - ssh
     - fail2ban
     - user
-    - ufw
     - sysctl
     - kernel_modules
 
   tasks:
+    - name: Include tailscale role when use_tailscale is enabled
+      include_role:
+        name: tailscale
+      when: use_tailscale
+
+    - name: Include ufw role
+      include_role:
+        name: ufw
+
     - name: Include dokploy role only if this is the control VPS
       include_role:
         name: dokploy
       when: is_control_node
+
+    - name: Check if Docker is installed
+      ansible.builtin.stat:
+        path: /usr/bin/docker
+      register: docker_binary
 
     - name: Check if Traefik is installed
       ansible.builtin.stat:
