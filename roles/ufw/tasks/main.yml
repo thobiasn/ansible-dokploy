@@ -19,15 +19,6 @@
   when: tailscale_connected is not defined or not tailscale_connected
   tags: ufw_rules
 
-- name: UFW - Delete SSH allow rule (Tailscale handles SSH)
-  community.general.ufw:
-    rule: allow
-    port: "{{ ssh_port | string }}"
-    proto: tcp
-    delete: true
-  when: tailscale_connected is defined and tailscale_connected
-  tags: ufw_rules
-
 - name: UFW - Allow HTTP Server
   community.general.ufw:
     rule: allow
